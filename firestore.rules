@@ -12,13 +12,32 @@ service cloud.firestore {
       );
     }
 
+    function canReadForJoin(data) {
+      return signedIn() && data.guestId == null;
+    }
+
+    function isJoiningRoom() {
+      return signedIn() &&
+        resource.data.guestId == null &&
+        request.auth.uid != resource.data.hostId &&
+        request.resource.data.roomCode == resource.data.roomCode &&
+        request.resource.data.hostId == resource.data.hostId &&
+        request.resource.data.board == resource.data.board &&
+        request.resource.data.currentPlayer == resource.data.currentPlayer &&
+        request.resource.data.winner == resource.data.winner &&
+        request.resource.data.lastMove == resource.data.lastMove &&
+        request.resource.data.reaction == resource.data.reaction &&
+        request.resource.data.guestId == request.auth.uid &&
+        request.resource.data.status == "playing";
+    }
+
     match /rooms/{roomId} {
       allow create: if signedIn() &&
         request.resource.data.hostId == request.auth.uid &&
         request.resource.data.guestId == null;
 
-      allow read: if isParticipant(resource.data);
-      allow update: if isParticipant(resource.data);
+      allow read: if isParticipant(resource.data) || canReadForJoin(resource.data);
+      allow update: if isParticipant(resource.data) || isJoiningRoom();
       allow delete: if signedIn() && request.auth.uid == resource.data.hostId;
     }
   }

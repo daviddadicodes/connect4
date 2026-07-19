@@ -35,6 +35,7 @@ const state = {
   lastHoverSoundAt: 0,
   sfxVolume: 0.85,
   musicVolume: 0,
+  menuModeHintTimeout: null,
   online: {
     enabled: Boolean(firebaseProject?.enabled),
     available: false,
@@ -91,7 +92,9 @@ const elements = {
   difficultyEasyButton: document.getElementById("difficultyEasyButton"),
   difficultyMediumButton: document.getElementById("difficultyMediumButton"),
   difficultyHardButton: document.getElementById("difficultyHardButton"),
+  difficultyPanel: document.getElementById("difficultyPanel"),
   difficultyDescription: document.getElementById("difficultyDescription"),
+  difficultyConfirmButton: document.getElementById("difficultyConfirmButton"),
   menuModeValue: document.getElementById("menuModeValue"),
   menuDifficultyValue: document.getElementById("menuDifficultyValue"),
   onlineRoomPanel: document.getElementById("onlineRoomPanel"),
@@ -200,11 +203,16 @@ function bindEvents() {
   if (elements.modePvpButton) {
     elements.modePvpButton.addEventListener("click", () => setMode("pvp"));
   }
-  elements.modeAiButton.addEventListener("click", () => setMode("ai"));
+  elements.modeAiButton.addEventListener("click", handleAiModeButton);
   elements.modeOnlineButton.addEventListener("click", () => setMode("online"));
   elements.difficultyEasyButton.addEventListener("click", () => setDifficulty("easy"));
   elements.difficultyMediumButton.addEventListener("click", () => setDifficulty("medium"));
   elements.difficultyHardButton.addEventListener("click", () => setDifficulty("hard"));
+  elements.difficultyConfirmButton.addEventListener("click", () => {
+    primeAudio();
+    clickSound();
+    closePanels();
+  });
 
   elements.createRoomButton.addEventListener("click", handleCreateRoom);
   elements.copyRoomButton.addEventListener("click", copyRoomCode);
@@ -248,10 +256,13 @@ function bindEvents() {
   document.querySelectorAll("button").forEach((button) => {
     button.addEventListener("pointerenter", () => {
       if (!button.disabled && !button.classList.contains("column-hit")) {
-        playUiHoverTick();
+        playUiHoverTick(button);
       }
     });
   });
+
+  document.addEventListener("pointermove", handleMenuParallax);
+  document.addEventListener("pointerleave", resetMenuParallax);
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.openPanel) {
@@ -271,7 +282,7 @@ function bindEvents() {
 
 async function handleStartButton() {
   primeAudio();
-  clickSound();
+  playStartClickSound();
 
   if (state.mode === "online") {
     await startOnlineFlow();
@@ -280,6 +291,11 @@ async function handleStartButton() {
 
   showGame();
   resetLocalGame();
+}
+
+function handleAiModeButton() {
+  setMode("ai");
+  openPanel("difficultyPanel");
 }
 
 async function handleCreateRoom() {
@@ -893,22 +909,48 @@ async function copyRoomCode() {
     await navigator.clipboard.writeText(state.online.roomId);
     elements.copyRoomButton.textContent = "Copied";
     elements.roomCodeDisplay.classList.add("room-code-copied");
-    updateOnlineRoomUI(`Room code ${state.online.roomId} copied.`);
-    elements.roomCodeMeta.textContent = "Copied. Send this code to your friend.";
+    elements.roomCodeDisplay.classList.remove("copied-pop");
+    void elements.roomCodeDisplay.offsetWidth;
+    elements.roomCodeDisplay.classList.add("copied-pop");
+    updateOnlineRoomUI(`Room ready. Code ${state.online.roomId} copied.`);
+    elements.roomCodeMeta.textContent = "Copied. Send it to your friend.";
     window.setTimeout(() => {
       elements.copyRoomButton.textContent = "Copy Code";
       elements.roomCodeDisplay.classList.remove("room-code-copied");
+      elements.roomCodeDisplay.classList.remove("copied-pop");
       if (state.online.roomId) {
-        elements.roomCodeMeta.textContent = "Create a room and send the code to your friend.";
+        elements.roomCodeMeta.textContent = "Share your code or enter theirs.";
       }
     }, 1400);
   } catch (error) {
-    updateOnlineRoomUI(`Room code: ${state.online.roomId}`);
+    updateOnlineRoomUI(`Room ready. Share code ${state.online.roomId}.`);
   }
 }
 
 function setMode(mode) {
   state.mode = mode;
+  document.body.classList.remove("mode-ai-focus", "mode-online-focus");
+  if (state.menuModeHintTimeout) {
+    clearTimeout(state.menuModeHintTimeout);
+    state.menuModeHintTimeout = null;
+  }
+  const aiMeta = elements.modeAiButton?.querySelector(".menu-button-meta");
+  if (aiMeta) {
+    aiMeta.textContent = "Solo play";
+  }
+  if (mode === "ai") {
+    document.body.classList.add("mode-ai-focus");
+    if (aiMeta) {
+      aiMeta.textContent = "Choose difficulty";
+      state.menuModeHintTimeout = window.setTimeout(() => {
+        if (state.mode === "ai") {
+          aiMeta.textContent = "Solo play";
+        }
+      }, 1400);
+    }
+  } else if (mode === "online") {
+    document.body.classList.add("mode-online-focus");
+  }
   updateMenuSelections();
   saveSettings();
 }
@@ -1929,9 +1971,9 @@ function updateOnlineRoomUI(message) {
   elements.roomCodeDisplay.classList.toggle("room-code-live", Boolean(state.online.roomId));
   elements.roomCodeMeta.textContent = state.online.roomId
     ? state.online.roomData?.guestId
-      ? "Friend connected. Ready for the next drop."
-      : "Share this code with your friend to join the room."
-    : "Create a room and send the code to your friend.";
+      ? "Friend connected. Launch when ready."
+      : "Share your code or enter theirs."
+    : "Create a room or enter a friend code.";
 }
 
 function getFirebaseErrorMessage(error) {
@@ -1956,6 +1998,7 @@ function openPanel(panelName) {
   clickSound();
   closePanels();
   state.openPanel = panelName;
+  document.body.classList.add("modal-open");
   elements.modalBackdrop.classList.remove("hidden");
   elements[panelName].classList.remove("hidden");
   if (panelName === "settingsPanel") {
@@ -1965,9 +2008,11 @@ function openPanel(panelName) {
 
 function closePanels() {
   state.openPanel = null;
+  document.body.classList.remove("modal-open");
   elements.modalBackdrop.classList.add("hidden");
   elements.howToPlayPanel.classList.add("hidden");
   elements.settingsPanel.classList.add("hidden");
+  elements.difficultyPanel.classList.add("hidden");
   elements.resultPanel.classList.add("hidden");
   elements.resultBadge.classList.remove("yellow", "red", "blue", "draw", "burst");
 }
@@ -2100,6 +2145,14 @@ function clickSound() {
   ]);
 }
 
+function playStartClickSound() {
+  playToneSequence([
+    { frequency: 520, duration: 0.04, type: "triangle", volume: 0.026 },
+    { frequency: 660, duration: 0.05, type: "triangle", volume: 0.024, delay: 0.018 },
+    { frequency: 820, duration: 0.08, type: "sine", volume: 0.024, delay: 0.07 },
+  ]);
+}
+
 function playDropSound(row) {
   playToneSequence([
     { frequency: 460 - row * 20, duration: 0.03, type: "triangle", volume: 0.035 },
@@ -2217,12 +2270,26 @@ function playHoverTick(col) {
   playToneSequence([{ frequency: 760, duration: 0.018, type: "triangle", volume: 0.012 }]);
 }
 
-function playUiHoverTick() {
+function playUiHoverTick(button) {
   const now = performance.now();
   if (now - state.lastHoverSoundAt < 80) return;
   state.lastHoverSoundAt = now;
   primeAudio();
-  playToneSequence([{ frequency: 690, duration: 0.015, type: "triangle", volume: 0.01 }]);
+  const isPrimary = button?.id === "startButton";
+  playToneSequence([{ frequency: isPrimary ? 740 : 690, duration: isPrimary ? 0.018 : 0.015, type: "triangle", volume: isPrimary ? 0.012 : 0.01 }]);
+}
+
+function handleMenuParallax(event) {
+  if (state.currentScreen !== "menu") return;
+  const x = (event.clientX / window.innerWidth - 0.5) * 10;
+  const y = (event.clientY / window.innerHeight - 0.5) * 10;
+  document.documentElement.style.setProperty("--menu-parallax-x", `${x.toFixed(2)}px`);
+  document.documentElement.style.setProperty("--menu-parallax-y", `${y.toFixed(2)}px`);
+}
+
+function resetMenuParallax() {
+  document.documentElement.style.setProperty("--menu-parallax-x", "0px");
+  document.documentElement.style.setProperty("--menu-parallax-y", "0px");
 }
 
 function ensureAmbientAudio() {
